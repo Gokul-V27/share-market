@@ -200,6 +200,28 @@ aggregated to 1,440 one-minute candles. `examples/btc_levels.json` uses round nu
 the 5m replay takes 14 trades: +2.06R gross but -8.52R net at a 0.10% round trip. Tight 5m
 stops are mostly eaten by costs, which is the point the timing-and-costs section keeps making.
 
+## Delta Exchange
+
+`--source delta --symbol BTCUSD` feeds the watcher live candles from Delta Exchange India
+(public, no key needed). `delta-account` shows your balances and open positions **read-only**.
+Nothing in this repo places orders.
+
+Put credentials in a local `.env` (git-ignored, never commit it):
+
+```
+DELTA_API_KEY=...
+DELTA_API_SECRET=...
+DELTA_BASE_URL=https://api.india.delta.exchange
+```
+
+Delta keys are locked to whitelisted IPs, so run `delta-account` from a machine whose IP is on
+the key's whitelist. For this, create the key with read-only permission (no trading).
+
+```bash
+python -m laya_market btc --source delta --symbol BTCUSD --levels-file my_levels.json --watch
+python -m laya_market delta-account
+```
+
 ## Text guard and NandhaKishorM/laya
 
 [`laya`](https://github.com/NandhaKishorM/laya) (`pip install laya`, needs torch) is a

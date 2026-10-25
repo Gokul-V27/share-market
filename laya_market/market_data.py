@@ -81,6 +81,13 @@ def coinbase_product(symbol: str) -> str:
 def fetch_candles(symbol: str, tf: str, limit: int = 120, source: str = "auto") -> tuple[list[Candle], str]:
     """Return (candles oldest-first, source name). The last candle is usually still forming."""
     errors = []
+    if source == "delta":
+        from . import delta  # Delta Exchange India, same BTCUSD contract as the trades CSV
+
+        try:
+            return delta.fetch_candles(symbol, tf, limit), f"Delta Exchange {symbol}"
+        except DataError as e:
+            raise DataError(f"no data source worked:\n  {e}") from e
     if source in ("auto", "binance"):
         for base in BINANCE_BASES:
             url = f"{base}/api/v3/klines?symbol={symbol.upper()}&interval={tf}&limit={limit}"

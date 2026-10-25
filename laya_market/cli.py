@@ -161,6 +161,23 @@ def cmd_rr(a) -> int:
     return 0
 
 
+def cmd_delta_account(a) -> int:
+    from . import delta
+
+    bal = [b for b in delta.wallet_balances() if float(b.get("balance") or 0)]
+    pos = [p for p in delta.positions() if float(p.get("size") or 0)]
+    print("Delta Exchange account (read-only)")
+    if not bal:
+        print("  no non-zero balances")
+    for b in bal:
+        print(f"  {b.get('asset_symbol')}: balance {b.get('balance')} | available {b.get('available_balance')}")
+    print("Open positions:" if pos else "No open positions.")
+    for p in pos:
+        print(f"  {p.get('product_symbol')}: size {p.get('size')} @ {p.get('entry_price')} | "
+              f"liq {p.get('liquidation_price')} | unrealised P&L {p.get('unrealized_pnl')}")
+    return 0
+
+
 def cmd_guard(a) -> int:
     g = text_guard.check(a.text, a.guard)
     print(json.dumps({"asks_for_guaranteed_call": g.asks_for_call, "p_guarantee": round(g.guarantee, 3),
@@ -194,7 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--levels-file", help='JSON: {"levels": [{"price": 78000, "label": "..."}]}')
     b.add_argument("--exec-tf", default="5m", choices=("1m", "5m", "15m"))
     b.add_argument("--cost-pct", type=float, default=0.10, help="assumed round-trip fees+spread+slippage, %%")
-    b.add_argument("--source", default="auto", choices=("auto", "binance", "coinbase"))
+    b.add_argument("--source", default="auto", choices=("auto", "binance", "coinbase", "delta"),
+                   help="delta = Delta Exchange India (use --symbol BTCUSD)")
     b.add_argument("--watch", action="store_true", help="keep refreshing")
     b.add_argument("--every", type=float, default=30, help="refresh seconds with --watch")
     b.add_argument("--csv", help="trades CSV (price,size,timestamp) or OHLCV CSV instead of live data")
@@ -241,6 +259,9 @@ def build_parser() -> argparse.ArgumentParser:
     rr.add_argument("--levels-file")
     rr.add_argument("--levels-step", type=int, default=500, help="test levels every N USD when none are given")
     rr.set_defaults(func=cmd_rr)
+
+    da = sub.add_parser("delta-account", help="read-only Delta Exchange balances and positions (keys in .env)")
+    da.set_defaults(func=cmd_delta_account)
 
     g = sub.add_parser("guard", help="run the text guard on a sentence")
     g.add_argument("text")
