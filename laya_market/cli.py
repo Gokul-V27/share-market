@@ -56,6 +56,9 @@ def cmd_btc(a) -> int:
                   f"{', '.join(f'{lv.price:g}' for lv in levels) or 'none'})")
             print("\n".join(log) if log else "(no trades)")
             print(btc_watcher.summarize(trades, a.cost_pct))
+            if a.balance:
+                print()
+                print("\n".join(btc_watcher.account(trades, a.balance, a.cost_pct, a.leverage)))
             print("Study example, not financial advice.")
             return 0
         now = _parse_at(a.at) if a.at else candles[-1].close_time
@@ -133,6 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--at", help="with --csv: analyse as of this UTC time, e.g. 2026-09-01T14:00")
     b.add_argument("--replay", action="store_true", help="with --csv: paper-trade the rules over the file")
     b.add_argument("--save-1m", help="with --csv: also write the aggregated 1m candles here")
+    b.add_argument("--balance", type=float, help="with --replay: paper account size in USD, e.g. 10")
+    b.add_argument("--leverage", type=float, default=1.0, help="with --balance: position = balance x this")
     b.add_argument("--json", action="store_true")
     guard_opts(b)
     b.set_defaults(func=cmd_btc)

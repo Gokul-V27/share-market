@@ -164,6 +164,19 @@ class WatcherTest(unittest.TestCase):
             self.assertGreater(t.closed, t.opened)
         self.assertIn("paper trades", btc_watcher.summarize(trades, 0.10))
 
+    def test_ten_dollar_account(self):
+        trades, _ = btc_watcher.replay(self.candles, LEVELS, "BTCUSD", "5m", 0.10)
+        lines = btc_watcher.account(trades, 10.0, 0.10)
+        self.assertEqual(len(lines), len(trades) + 2)
+        # first trade: long time-stopped 78,705 -> 78,658 = -0.0597% move - 0.10% cost on $10
+        first = trades[0]
+        expected = 10 * ((first.exit - first.fill) / first.fill - 0.001)
+        self.assertIn(f"P&L {expected:+.4f} USD", lines[1])
+        self.assertTrue(lines[-1].startswith("End balance $9.9441"))
+
+    def test_account_with_no_trades(self):
+        self.assertIn("End balance $10.0000", btc_watcher.account([], 10.0, 0.1)[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

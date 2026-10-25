@@ -108,6 +108,11 @@ python -m laya_market btc [--symbol BTCUSDT] [--level P ...] [--levels-file F] [
   If the stop and target fall in the same 1m candle, the stop counts as hit first. Results are
   shown gross and net of `--cost-pct`.
 
+Add `--balance 10` to run the replay through a $10 paper account. Each trade uses the whole
+balance (a $10 account is too small to size by risk), with no leverage unless `--leverage` is
+set, and profits compound. Shorts assume futures or margin. On 2026-09-01: $10 -> **$9.94**
+on 5m at 0.10% cost, $10.03 at 0.04%; $9.84 on 15m.
+
 `tests/fixtures/btcusd_2026-09-01_1m.csv` is the 2026-09-01 BTCUSD tick file (314,107 trades)
 aggregated to 1,440 one-minute candles. `examples/btc_levels.json` uses round numbers as
 **test levels**; replace them with the lines you actually draw. On that day, with those levels,

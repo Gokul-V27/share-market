@@ -253,6 +253,34 @@ def summarize(trades: list[Trade], cost_pct: float) -> str:
             f"{sum(net):+.2f}R net after {cost_pct:.2f}% round trip | avg {sum(net) / len(net):+.2f}R net")
 
 
+def account(trades: list[Trade], balance: float, cost_pct: float, leverage: float = 1.0) -> list[str]:
+    """Run the trades through a small paper account, compounding.
+
+    Each trade puts the whole balance x leverage into the position (a $10 account is too small
+    to size by risk). P&L = notional x price move % - notional x round-trip cost %.
+    Shorts assume a venue that allows them (futures/margin).
+    """
+    lines = [f"Paper account: start ${balance:,.2f}, full balance per trade, {leverage:g}x leverage, "
+             f"{cost_pct:.2f}% round-trip cost"]
+    start, peak, worst_dd = balance, balance, 0.0
+    for t in trades:
+        if balance <= 0:
+            lines.append("account wiped out; no further trades")
+            break
+        sign = 1 if t.setup.direction == "long" else -1
+        notional = balance * leverage
+        pnl = notional * (sign * (t.exit - t.fill) / t.fill - cost_pct / 100)
+        balance = max(0.0, balance + pnl)
+        peak = max(peak, balance)
+        worst_dd = max(worst_dd, (peak - balance) / peak * 100 if peak else 0)
+        lines.append(f"{_ts(t.opened)} {t.setup.direction:5} {t.setup.kind:9} {t.reason:22} "
+                     f"P&L {pnl:+.4f} USD -> balance ${balance:,.4f}")
+    change = balance - start
+    lines.append(f"End balance ${balance:,.4f} ({change:+.4f} USD, {change / start * 100:+.2f}%), "
+                 f"worst drawdown {worst_dd:.2f}%")
+    return lines
+
+
 # --- live --------------------------------------------------------------------------------------
 
 def fetch_all(symbol: str, source: str) -> tuple[dict[str, list[Candle]], str]:
