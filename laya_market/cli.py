@@ -182,6 +182,48 @@ def cmd_delta_account(a) -> int:
     return 0
 
 
+def cmd_bots(a) -> int:
+    from . import bots, funnel
+    from .models import Level
+
+    checks = a.check.split(",")
+    rows: dict = {}
+    for path in a.csv:
+        m = load_csv(path)
+        lo, hi = min(c.low for c in m), max(c.high for c in m)
+        levels = [Level(p) for p in range(int(lo // 500) * 500, int(hi // 500 + 1) * 500 + 1, 500)]
+        snaps = btc_watcher.Snapshotter(m)
+        cands = {"ORB (30m range)": bots.orb_bot(m, 30), "LVL sweep (1:2)": bots.sweep_bot(m),
+                 "Laya 15m 1:6": btc_watcher.replay(m, levels, a.symbol, "15m", a.cost_pct, target_r=6,
+                                                    stop_atr=1.5, max_candles=96)[0]}
+        for bot, trades in cands.items():
+            for check in checks:
+                r = rows.setdefault((bot, check), {"cand": 0, "laya": 0, "risk": 0, "taken": []})
+                if check == "off":  # no Laya check and no risk gate: the bot alone
+                    r["cand"] += len(trades)
+                    r["taken"] += trades
+                    continue
+                ds = funnel.run(trades, m, levels, check, a.cost_pct, snaps)
+                r["cand"] += len(trades)
+                r["laya"] += sum(d.stage == "laya" for d in ds)
+                r["risk"] += sum(d.stage == "risk" for d in ds)
+                r["taken"] += [d.trade for d in ds if d.taken]
+        print(f"{path}: done", file=sys.stderr)
+    print(f"Bots: ${a.balance:g} each, full balance per trade, {a.cost_pct:.2f}% round-trip cost, {len(a.csv)} file(s)")
+    print("| Bot | Laya check | Candidates | Skipped by Laya | Skipped by risk gate | Taken | Win rate | "
+          f"${a.balance:g} -> | Max DD |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    for (bot, check), r in rows.items():
+        tk = r["taken"]
+        end, dd = bots.equity(tk, a.balance, a.cost_pct)
+        wr = sum(t.r_multiple(a.cost_pct) > 0 for t in tk) / len(tk) if tk else 0
+        label = "off (no check, no risk gate)" if check == "off" else check
+        print(f"| {bot} | {label} | {r['cand']} | {r['laya']} | {r['risk']} | {len(tk)} | {wr:.0%} | "
+              f"${end:,.2f} | {dd:.1f}% |")
+    print("Study example, not financial advice.")
+    return 0
+
+
 def cmd_guard(a) -> int:
     g = text_guard.check(a.text, a.guard)
     print(json.dumps({"asks_for_guaranteed_call": g.asks_for_call, "p_guarantee": round(g.guarantee, 3),
@@ -268,6 +310,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     da = sub.add_parser("delta-account", help="read-only Delta Exchange balances and positions (keys in .env)")
     da.set_defaults(func=cmd_delta_account)
+
+    bt = sub.add_parser("bots", help="ORB, LVL sweep and Laya bots through the Laya check + risk gate funnel")
+    bt.add_argument("--csv", action="append", required=True)
+    bt.add_argument("--check", default="off,none,rules",
+                    help="comma list: off (bot alone), none (risk gate only), rules, model (needs laya)")
+    bt.add_argument("--symbol", default="BTCUSDT")
+    bt.add_argument("--cost-pct", type=float, default=0.10)
+    bt.add_argument("--balance", type=float, default=10.0)
+    bt.set_defaults(func=cmd_bots)
 
     g = sub.add_parser("guard", help="run the text guard on a sentence")
     g.add_argument("text")

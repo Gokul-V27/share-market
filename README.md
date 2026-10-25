@@ -200,6 +200,38 @@ aggregated to 1,440 one-minute candles. `examples/btc_levels.json` uses round nu
 the 5m replay takes 14 trades: +2.06R gross but -8.52R net at a 0.10% round trip. Tight 5m
 stops are mostly eaten by costs, which is the point the timing-and-costs section keeps making.
 
+## Three bots and the decision funnel
+
+`laya_market/bots.py` adapts two day-trading bots to 24/7 BTC, and `laya_market/funnel.py` runs
+every candidate trade through one funnel: market data -> bot rules -> Laya check -> risk gate ->
+paper broker. The check can suggest; the risk gate can still reject.
+
+* **ORB**: opening range = first 30 min after 00:00 UTC; a 5m close beyond it enters; stop at the
+  other side of the range; exit at the day's end.
+* **LVL sweep**: range = Asia session 00:00-08:00 UTC. From 08:00 to 20:00, after price trades
+  beyond one side and a 5m candle closes back inside, enter at 25% of the range, stop at 12.5%,
+  target at 50% (1:2).
+* **News/insider bot**: not included; BTC has no insider filings and no historical news feed is
+  available here.
+* **Laya check**: `rules` (the engine's 4-timeframe read must agree with the trade's direction)
+  or `model` (NandhaKishorM `laya` asked TAKE/SKIP from a text summary of that read).
+* **Risk gate**: skip if fees exceed 0.35R; stop a bot for the day after 2 losses.
+
+```bash
+python -m laya_market bots --csv aug.csv.gz --csv sep.csv.gz --csv oct.csv.gz --check off,none,rules
+```
+
+Aug + Sep + Oct 1-24 2026, $10 each, 0.10% cost:
+
+| Bot | Bot alone | + risk gate | + rules check + risk gate | + model check + risk gate |
+|---|---|---|---|---|
+| ORB (30m) | $9.04 | $9.79 | $9.47 | $9.79 |
+| LVL sweep (1:2) | $9.44 | $9.77 | $9.85 | $9.85 |
+| Laya 15m 1:6 | **$12.21** | $10.76 | $10.47 | $10.36 |
+
+The risk gate cut losses for ORB and LVL by skipping trades whose stops were too tight for the
+fees, but it also cut the Laya bot's winners. Neither check beat the Laya bot running alone.
+
 ## Delta Exchange
 
 `--source delta --symbol BTCUSD` feeds the watcher live candles from Delta Exchange India
