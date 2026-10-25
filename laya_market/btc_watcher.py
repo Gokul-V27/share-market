@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -22,6 +23,7 @@ from .report import render
 
 TIMEFRAMES = ("1h", "15m", "5m", "1m")
 BUFFER_ATR = 0.5  # entry/stop sit half an exec-timeframe ATR either side of the level
+SNAPSHOT_BARS = 150
 STALE_EXEC_CANDLES = 8  # paper trades still open after 8 exec candles are closed (levels stale)
 
 
@@ -130,7 +132,30 @@ def build_analysis(symbol: str, candles: dict[str, list[Candle]], levels: list[L
 
 def snapshot(candles_1m: list[Candle], now_ms: int) -> dict[str, list[Candle]]:
     """What each timeframe's chart looked like at now_ms, built from 1m candles."""
-    return {tf: resample(candles_1m, tf, now_ms)[-150:] for tf in TIMEFRAMES}
+    return {tf: resample(candles_1m, tf, now_ms)[-SNAPSHOT_BARS:] for tf in TIMEFRAMES}
+
+
+class Snapshotter:
+    """snapshot() for many moments in a long history: resample once, then slice."""
+
+    def __init__(self, candles_1m: list[Candle]):
+        self.m = candles_1m
+        self.m_opens = [c.open_time for c in candles_1m]
+        self.full = {tf: resample(candles_1m, tf) for tf in TIMEFRAMES}
+        self.opens = {tf: [c.open_time for c in self.full[tf]] for tf in TIMEFRAMES}
+
+    def at(self, now_ms: int) -> dict[str, list[Candle]]:
+        out = {}
+        last_closed_1m = bisect_right(self.m_opens, now_ms - TF_MS["1m"])
+        for tf in TIMEFRAMES:
+            bucket = now_ms - now_ms % TF_MS[tf]
+            j = bisect_left(self.opens[tf], bucket)
+            bars = self.full[tf][max(0, j - SNAPSHOT_BARS):j]
+            i0 = bisect_left(self.m_opens, bucket)
+            if last_closed_1m > i0:  # the forming candle, from the 1m candles closed so far
+                bars = bars + resample(self.m[i0:last_closed_1m], tf)
+            out[tf] = bars[-SNAPSHOT_BARS:]
+        return out
 
 
 # --- paper-trade replay -----------------------------------------------------------------------
@@ -161,8 +186,11 @@ def _ts(ms: int) -> str:
 
 
 def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD", exec_tf: str = "5m",
-           cost_pct: float = 0.10, warmup_minutes: Optional[int] = None) -> tuple[list[Trade], list[str]]:
+           cost_pct: float = 0.10, warmup_minutes: Optional[int] = None,
+           reads: Optional[list] = None) -> tuple[list[Trade], list[str]]:
     """Step through history one exec candle at a time and paper-trade Laya's own rules.
+
+    Pass a list as `reads` to collect (time_ms, bias, action) for every exec-candle read.
 
     A trade is taken only when the rules would say ENTER-ON-TRIGGER: a valid, with-trend,
     not-weak setup (as built at the previous close) whose close-only trigger fires. Fill is the
@@ -182,9 +210,10 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
     log: list[str] = []
     pending: Optional[Result] = None
     open_trade: Optional[Trade] = None
+    snaps = Snapshotter(candles_1m)
     now = start
     while now <= end:
-        snap = snapshot(candles_1m, now)
+        snap = snaps.at(now)
         exec_c = [c for c in snap[exec_tf] if c.is_closed(now)]
         if open_trade is not None:
             _manage(open_trade, by_time, now - step, now, step)
@@ -205,6 +234,8 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
                         continue
                     break
         pending = analyse(build_analysis(symbol, snap, levels, now, exec_tf, cost_pct, "csv replay"))
+        if reads is not None and now < end:  # the read at `end` belongs to the next day
+            reads.append((now, pending.verdict.bias, pending.verdict.action))
         now += step
     if open_trade is not None:
         last = candles_1m[-1]
@@ -279,6 +310,57 @@ def account(trades: list[Trade], balance: float, cost_pct: float, leverage: floa
     lines.append(f"End balance ${balance:,.4f} ({change:+.4f} USD, {change / start * 100:+.2f}%), "
                  f"worst drawdown {worst_dd:.2f}%")
     return lines
+
+
+def daily_report(trades: list[Trade], reads: list, balance: float, cost_pct: float,
+                 leverage: float = 1.0) -> list[str]:
+    """One row per UTC day: the day's trend, the trades and the $ result; no-trade days say why."""
+    days: dict[str, dict] = {}
+    for ms, bias, action in reads:
+        d = days.setdefault(_ts(ms)[:10], {"bull": 0, "bear": 0, "mixed": 0, "enter": 0, "trades": []})
+        d[{"bullish": "bull", "bearish": "bear"}.get(bias, "mixed")] += 1
+        d["enter"] += action == "ENTER-ON-TRIGGER"
+    for t in trades:
+        days.setdefault(_ts(t.opened)[:10], {"bull": 0, "bear": 0, "mixed": 0, "enter": 0, "trades": []})[
+            "trades"].append(t)
+    rows = ["| Day | Trend (share of 5m reads) | Trades | Won | Lost | P&L USD | Balance | Note |",
+            "|-----|---------------------------|--------|-----|------|---------|---------|------|"]
+    start = balance
+    counts = {"trend": {"bullish": 0, "bearish": 0, "mixed": 0}, "no_trade": 0}
+    for day in sorted(days):
+        d = days[day]
+        n = d["bull"] + d["bear"] + d["mixed"] or 1
+        shares = {"bullish": d["bull"] / n, "bearish": d["bear"] / n, "mixed": d["mixed"] / n}
+        trend = max(shares, key=shares.get)
+        counts["trend"][trend] += 1
+        pnl = won = lost = 0
+        for t in d["trades"]:
+            sign = 1 if t.setup.direction == "long" else -1
+            p = balance * leverage * (sign * (t.exit - t.fill) / t.fill - cost_pct / 100)
+            balance = max(0.0, balance + p)
+            pnl += p
+            won += p > 0
+            lost += p <= 0
+        if d["trades"]:
+            note = ""
+        else:
+            counts["no_trade"] += 1
+            if shares["mixed"] >= 0.99:
+                note = "no trade: no trend all day (mixed)"
+            elif d["enter"] == 0:
+                note = "no trade: trend but no with-trend setup worth 1:1.5"
+            else:
+                note = "no trade: setups ready but no close trigger fired"
+        mix = f"{trend} ({shares['bullish']:.0%} bull / {shares['bearish']:.0%} bear / {shares['mixed']:.0%} mixed)"
+        rows.append(f"| {day} | {mix} | {len(d['trades'])} | {won} | {lost} | {pnl:+.4f} | ${balance:,.4f} | {note} |")
+    total = len(trades)
+    rows.append("")
+    rows.append(f"Days: {len(days)} | trend days: {counts['trend']['bullish']} bullish, "
+                f"{counts['trend']['bearish']} bearish, {counts['trend']['mixed']} no trend (mixed) | "
+                f"no-trade days: {counts['no_trade']} | trades: {total}")
+    rows.append(f"$ {start:,.2f} -> ${balance:,.4f} ({balance - start:+.4f} USD, "
+                f"{(balance - start) / start * 100:+.2f}%)")
+    return rows
 
 
 # --- live --------------------------------------------------------------------------------------

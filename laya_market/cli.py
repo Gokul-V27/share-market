@@ -51,7 +51,8 @@ def cmd_btc(a) -> int:
             write_candles_csv(candles, a.save_1m)
             print(f"wrote {len(candles)} 1m candles to {a.save_1m}", file=sys.stderr)
         if a.replay:
-            trades, log = btc_watcher.replay(candles, levels, a.symbol, a.exec_tf, a.cost_pct)
+            reads: list = []
+            trades, log = btc_watcher.replay(candles, levels, a.symbol, a.exec_tf, a.cost_pct, reads=reads)
             print(f"Paper-trade replay of {a.csv} ({len(candles)} 1m candles, levels: "
                   f"{', '.join(f'{lv.price:g}' for lv in levels) or 'none'})")
             print("\n".join(log) if log else "(no trades)")
@@ -59,6 +60,8 @@ def cmd_btc(a) -> int:
             if a.balance:
                 print()
                 print("\n".join(btc_watcher.account(trades, a.balance, a.cost_pct, a.leverage)))
+                print()
+                print("\n".join(btc_watcher.daily_report(trades, reads, a.balance, a.cost_pct, a.leverage)))
             print("Study example, not financial advice.")
             return 0
         now = _parse_at(a.at) if a.at else candles[-1].close_time
@@ -97,6 +100,19 @@ def cmd_screenshot(a) -> int:
             with open(a.save, "w") as fh:
                 json.dump(read, fh, indent=2)
             print(f"saved the read to {a.save}; re-run with: python -m laya_market analyze {a.save}")
+    return 0
+
+
+def cmd_download(a) -> int:
+    from .market_data import fetch_history
+
+    start = _parse_at(a.start)
+    end = start + a.days * 86_400_000
+    candles = fetch_history(a.symbol, start, end,
+                            progress=lambda n: print(f"\r{n} candles", end="", file=sys.stderr))
+    print(file=sys.stderr)
+    write_candles_csv(candles, a.out)
+    print(f"wrote {len(candles)} 1m candles ({a.days} days of {a.symbol}) to {a.out}")
     return 0
 
 
@@ -148,6 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--save", help="write the JSON read here for later re-analysis")
     guard_opts(s)
     s.set_defaults(func=cmd_screenshot)
+
+    d = sub.add_parser("download", help="save historical 1m candles from Binance to a CSV (.csv or .csv.gz)")
+    d.add_argument("--symbol", default="BTCUSDT")
+    d.add_argument("--start", required=True, help="UTC start, e.g. 2026-09-01")
+    d.add_argument("--days", type=int, default=30)
+    d.add_argument("--out", required=True)
+    d.set_defaults(func=cmd_download)
 
     g = sub.add_parser("guard", help="run the text guard on a sentence")
     g.add_argument("text")

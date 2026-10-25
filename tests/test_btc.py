@@ -26,6 +26,12 @@ DAY = 1_788_220_800_000  # 2026-09-01T00:00:00Z
 MIN = 60_000
 
 
+def _ts_day(ms):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
 def c(i, o, h, lo, cl, step=MIN, v=1.0):
     return Candle(DAY + i * step, o, h, lo, cl, v, step)
 
@@ -173,6 +179,25 @@ class WatcherTest(unittest.TestCase):
         expected = 10 * ((first.exit - first.fill) / first.fill - 0.001)
         self.assertIn(f"P&L {expected:+.4f} USD", lines[1])
         self.assertTrue(lines[-1].startswith("End balance $9.9441"))
+
+    def test_snapshotter_matches_snapshot(self):
+        snaps = btc_watcher.Snapshotter(self.candles)
+        for minute in (5, 30, 61, 600, 1092, 1439):
+            for offset in (0, 20_000):
+                now = DAY + minute * MIN + offset
+                a, b = btc_watcher.snapshot(self.candles, now), snaps.at(now)
+                for tf in a:
+                    self.assertEqual([vars(x) for x in a[tf]], [vars(x) for x in b[tf]], (tf, now))
+
+    def test_daily_report(self):
+        reads: list = []
+        trades, _ = btc_watcher.replay(self.candles, LEVELS, "BTCUSD", "5m", 0.10, reads=reads)
+        rows = btc_watcher.daily_report(trades, reads, 10.0, 0.10)
+        self.assertTrue(rows[2].startswith("| 2026-09-01 | "))
+        self.assertIn(f"| {len(trades)} | ", rows[2])
+        self.assertIn("trades: 14", rows[-2])
+        self.assertTrue(rows[-1].startswith("$ 10.00 -> $9.9441"))
+        self.assertTrue(all(_ts_day(ms) == "2026-09-01" for ms, _, _ in reads))
 
     def test_account_with_no_trades(self):
         self.assertIn("End balance $10.0000", btc_watcher.account([], 10.0, 0.1)[-1])

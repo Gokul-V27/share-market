@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 import urllib.error
 import urllib.request
@@ -132,7 +133,8 @@ def trades_to_candles(trades: Iterable[tuple[int, float, float]], tf: str = "1m"
 
 def load_csv(path: str, tf: str = "1m") -> list[Candle]:
     """Load either a trades CSV (price,size,timestamp) or an OHLCV CSV (timestamp,open,high,low,close,volume)."""
-    with open(path, newline="") as fh:
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", newline="") as fh:
         reader = csv.DictReader(fh)
         cols = {c.lower().strip(): c for c in (reader.fieldnames or [])}
         ts_col = next((cols[c] for c in ("timestamp", "time", "open_time", "date", "datetime") if c in cols), None)
@@ -158,7 +160,8 @@ def load_csv(path: str, tf: str = "1m") -> list[Candle]:
 
 
 def write_candles_csv(candles: list[Candle], path: str) -> None:
-    with open(path, "w", newline="") as fh:
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "wt", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["timestamp", "open", "high", "low", "close", "volume"])
         for c in candles:
@@ -186,4 +189,22 @@ def resample(candles: list[Candle], tf: str, now_ms: Optional[int] = None) -> li
             b.volume += c.volume
         else:
             out.append(Candle(start, c.open, c.high, c.low, c.close, c.volume, step))
+    return out
+
+
+def fetch_history(symbol: str, start_ms: int, end_ms: int, tf: str = "1m", progress=None) -> list[Candle]:
+    """Closed candles in [start_ms, end_ms) from Binance's public market-data API, 1000 per request."""
+    step = TF_MS[tf]
+    out: list[Candle] = []
+    cursor = start_ms
+    while cursor < end_ms:
+        url = (f"{BINANCE_BASES[0]}/api/v3/klines?symbol={symbol.upper()}&interval={tf}"
+               f"&startTime={cursor}&endTime={end_ms - 1}&limit=1000")
+        batch = parse_binance(_get_json(url, timeout=30), tf)
+        if not batch:
+            break
+        out.extend(c for c in batch if c.open_time < end_ms)
+        cursor = batch[-1].open_time + step
+        if progress:
+            progress(len(out))
     return out

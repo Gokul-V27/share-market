@@ -1,0 +1,117 @@
+{
+ "_comment": "TEST levels for the September 2026 replay: every 500 USD across the month range (74,968-87,396). Replace with the lines you actually draw.",
+ "levels": [
+  {
+   "price": 74500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 75000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 75500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 76000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 76500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 77000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 77500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 78000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 78500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 79000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 79500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 80000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 80500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 81000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 81500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 82000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 82500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 83000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 83500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 84000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 84500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 85000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 85500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 86000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 86500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 87000,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 87500,
+   "label": "round number (test level)"
+  },
+  {
+   "price": 88000,
+   "label": "round number (test level)"
+  }
+ ]
+}

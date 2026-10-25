@@ -113,6 +113,30 @@ balance (a $10 account is too small to size by risk), with no leverage unless `-
 set, and profits compound. Shorts assume futures or margin. On 2026-09-01: $10 -> **$9.94**
 on 5m at 0.10% cost, $10.03 at 0.04%; $9.84 on 15m.
 
+The daily table lists each UTC day's trend (share of 5m reads that were bullish / bearish /
+mixed), trades won and lost, $ P&L and balance. A day with no trade says why: no trend all day,
+no with-trend setup worth 1:1.5, or setups ready but no close trigger.
+
+### 30 days (September 2026)
+
+```bash
+python -m laya_market download --symbol BTCUSDT --start 2026-09-01 --days 30 --out data/btcusdt_2026-09_1m.csv.gz
+python -m laya_market btc --csv data/btcusdt_2026-09_1m.csv.gz --levels-file examples/btc_levels_2026-09.json \
+    --replay --balance 10
+```
+
+`data/btcusdt_2026-09_1m.csv.gz` is Binance BTCUSDT 1m candles for 2026-09-01 to 09-30 (43,200).
+`examples/btc_levels_2026-09.json` holds **test levels** every 500 USD across the month's range.
+With $10, full balance per trade and no leverage:
+
+| Exec TF | Trades | No cost | 0.04% cost | 0.10% cost |
+|---|---|---|---|---|
+| 5m | 338 | $10.09 | $8.81 | $7.19 |
+| 15m | 164 | $10.00 | $9.36 | $8.49 |
+
+Before costs the rules roughly break even. After costs every variant loses, because round-number
+levels and half-ATR stops get stopped out by noise far more often than they reach target 1.
+
 `tests/fixtures/btcusd_2026-09-01_1m.csv` is the 2026-09-01 BTCUSD tick file (314,107 trades)
 aggregated to 1,440 one-minute candles. `examples/btc_levels.json` uses round numbers as
 **test levels**; replace them with the lines you actually draw. On that day, with those levels,
