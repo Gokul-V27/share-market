@@ -212,6 +212,31 @@ class WatcherTest(unittest.TestCase):
                 if t.reason == "stop":
                     self.assertAlmostEqual(t.r_multiple(), -1, places=6)
 
+    def test_breakeven_matches_win_rate_chart(self):
+        be = btc_watcher.breakeven_win_rate
+        self.assertAlmostEqual(be(1), 0.50)  # 1:1 breaks even at 50%
+        self.assertAlmostEqual(be(4), 0.20)  # 1:4 breaks even at 20%
+        self.assertLess(be(2), 0.40)  # 1:2 at 40% is a profit
+        self.assertGreater(be(2), 0.30)  # 1:2 at 30% is a loss
+        self.assertLess(be(3), 0.30)  # 1:3 at 30% is a profit
+        self.assertLess(be(5), 0.20)  # 1:5 at 20% is a profit
+        self.assertAlmostEqual(be(4, 0.2), 0.24)  # costs raise the bar
+
+    def test_auto_target_follows_trend_strength(self):
+        self.assertEqual([btc_watcher.auto_target_r(t) for t in (3, -4, 5, 6, -8)], [3, 4, 5, 6, 6])
+
+    def test_trailing_stop(self):
+        setup = btc_watcher.build_setups(77200, LEVELS, 100, "5m")[0]  # breakout long above 77,500
+        t = btc_watcher.Trade(opened=DAY, setup=setup, fill=77600, target=77600 + 6 * (77600 - setup.stop),
+                              stop=setup.stop)
+        risk = t.risk
+        bars = {DAY: c(0, 77600, 77600 + 1.5 * risk, 77590, 77650),  # +1.5R: trail to best - 1R
+                DAY + MIN: c(1, 77650, 77660, 77600 + 0.4 * risk, 77610)}  # dips to +0.4R: trailed out
+        btc_watcher._manage(t, bars, DAY, DAY + 2 * MIN, 300_000, trail=True)
+        self.assertEqual(t.reason, "trail stop")
+        self.assertAlmostEqual(t.exit, 77600 + 0.5 * risk)
+        self.assertAlmostEqual(t.r_multiple(), 0.5)
+
     def test_account_with_no_trades(self):
         self.assertIn("End balance $10.0000", btc_watcher.account([], 10.0, 0.1)[-1])
 

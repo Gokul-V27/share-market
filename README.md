@@ -163,6 +163,37 @@ picked on September from 54 combinations; August and October were not used to pi
 All after a 0.10% round-trip cost. Wider stops, a far target and fewer trades did better than
 tight 5m scalps. Only about 1 trade in 7-9 reached 6R, so long losing streaks are normal.
 
+### R:R sweep vs the win-rate chart
+
+Break-even win rate is `(1 + cost in R) / (1 + R)`: 50% at 1:1, 33% at 1:2, 25% at 1:3, 20% at
+1:4, 17% at 1:5, before costs. `rr` replays files at several R:R exits and compares the real win
+rate with that line:
+
+```bash
+python -m laya_market rr --csv aug.csv.gz --csv sep.csv.gz --csv oct.csv.gz \
+    --exec-tf 15m --stop-atr 1.5 --max-candles 96 --rr 1,1.5,2,3,4,5,6,auto [--trail]
+```
+
+Aug + Sep + Oct 1-24 2026, 15m, $10, 0.10% cost:
+
+| R:R | Win rate | Break-even (no cost) | Break-even (with cost) | $10 -> |
+|---|---|---|---|---|
+| 1:1 | skipped (rules need >= 1:1.5) | 50% | 50% | $10.00 |
+| 1:1.5 | 40.1% | 40.0% | 47.4% | $8.57 |
+| 1:2 | 33.9% | 33.3% | 39.6% | $9.44 |
+| 1:3 | 22.3% | 25.0% | 29.7% | $9.32 |
+| 1:4 | 17.4% | 20.0% | 23.8% | $10.01 |
+| 1:5 | 14.9% | 16.7% | 20.0% | $10.64 |
+| 1:6 | 13.2% | 14.3% | 17.2% | $12.21 |
+| auto 1:3-1:6 by trend strength | 14.9% | 17.5% | 20.9% | $9.14 |
+| 1:6 + trailing stop | 0.7% | 14.3% | 17.1% | $9.02 |
+
+The win rate sits almost exactly on the no-cost break-even line at every R:R, so the entries
+have no edge of their own; costs then push every short target into a loss. 1:5 and 1:6 only
+came out ahead because trades closed by the time stop were net positive. The two
+market-adaptive options, `--target-r auto` (bigger target in a stronger trend) and `--trail`
+(stop to break-even at +1R, then 1R behind the best price), both did worse than a plain 1:6.
+
 `tests/fixtures/btcusd_2026-09-01_1m.csv` is the 2026-09-01 BTCUSD tick file (314,107 trades)
 aggregated to 1,440 one-minute candles. `examples/btc_levels.json` uses round numbers as
 **test levels**; replace them with the lines you actually draw. On that day, with those levels,

@@ -54,8 +54,11 @@ def cmd_btc(a) -> int:
             reads: list = []
             trades, log = btc_watcher.replay(candles, levels, a.symbol, a.exec_tf, a.cost_pct, reads=reads,
                                              target_r=a.target_r, stop_atr=a.stop_atr,
-                                             max_candles=a.max_candles)
-            exit_rule = f"fixed 1:{a.target_r:g}" if a.target_r else "target 1 (next drawn level)"
+                                             max_candles=a.max_candles, trail=a.trail)
+            exit_rule = ("auto 1:3-1:6 from trend strength" if a.target_r == "auto" else
+                         f"fixed 1:{a.target_r}" if a.target_r else "target 1 (next drawn level)")
+            if a.trail:
+                exit_rule += ", trailing stop after 1R"
             print(f"Paper-trade replay of {a.csv} ({len(candles)} 1m candles, levels: "
                   f"{', '.join(f'{lv.price:g}' for lv in levels) or 'none'})")
             print(f"Exit: {exit_rule} | stop {a.stop_atr:g} ATR beyond the level | "
@@ -121,12 +124,53 @@ def cmd_download(a) -> int:
     return 0
 
 
+def cmd_rr(a) -> int:
+    from .models import Level
+
+    rr_list = [x.strip() if x.strip() == "auto" else float(x) for x in a.rr.split(",")]
+    per_rr: dict = {r: [] for r in rr_list}
+    balances = {r: a.balance for r in rr_list}
+    for path in a.csv:
+        candles = load_csv(path)
+        if a.levels_file or a.level:
+            levels = btc_watcher.load_levels(a.levels_file, a.level)
+        else:  # test levels: every --levels-step across this file's range
+            lo, hi = min(c.low for c in candles), max(c.high for c in candles)
+            step = a.levels_step
+            levels = [Level(p, "test level") for p in range(int(lo // step) * step, int(hi // step + 1) * step + 1, step)]
+        for r in rr_list:
+            trades, _ = btc_watcher.replay(candles, levels, a.symbol, a.exec_tf, a.cost_pct, target_r=r,
+                                           stop_atr=a.stop_atr, max_candles=a.max_candles, trail=a.trail)
+            per_rr[r].extend(trades)
+            for line in btc_watcher.account(trades, balances[r], a.cost_pct)[-1:]:
+                balances[r] = float(line.split("$")[1].split(" ")[0].replace(",", ""))
+            print(f"{path}: {r} done ({len(trades)} trades)", file=sys.stderr)
+    rows = []
+    for r in rr_list:
+        row = btc_watcher.rr_stats(per_rr[r], r, a.cost_pct, a.balance, balances[r])
+        if r == "auto":
+            row["label"] = f"auto (avg 1:{row['rr']:.1f})"
+        rows.append(row)
+    trail = " | trailing stop" if a.trail else ""
+    print(f"R:R sweep | {a.exec_tf} | stop {a.stop_atr:g} ATR beyond the level | time stop {a.max_candles} candles"
+          f"{trail} | {len(a.csv)} file(s)")
+    print("\n".join(btc_watcher.rr_table(rows, a.cost_pct, a.balance)))
+    print("Break-even win rate = (1 + cost in R) / (1 + R). Trail and time exits are neither full wins nor "
+          "full losses. auto = 1:3 to 1:6 from the trend total at entry. $ = full balance per trade, compounding.")
+    print("Study example, not financial advice.")
+    return 0
+
+
 def cmd_guard(a) -> int:
     g = text_guard.check(a.text, a.guard)
     print(json.dumps({"asks_for_guaranteed_call": g.asks_for_call, "p_guarantee": round(g.guarantee, 3),
                       "mentions_scheduled_news": g.mentions_news, "p_news": round(g.news, 3),
                       "backend": g.backend}, indent=2))
     return 0
+
+
+def _target_r(value: str):
+    return "auto" if value == "auto" else float(value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -159,7 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--save-1m", help="with --csv: also write the aggregated 1m candles here")
     b.add_argument("--balance", type=float, help="with --replay: paper account size in USD, e.g. 10")
     b.add_argument("--leverage", type=float, default=1.0, help="with --balance: position = balance x this")
-    b.add_argument("--target-r", type=float, help="with --replay: exit at a fixed R:R, e.g. 4 for 1:4")
+    b.add_argument("--target-r", type=_target_r, help="with --replay: exit at a fixed R:R, e.g. 4 for 1:4, or auto")
+    b.add_argument("--trail", action="store_true", help="with --replay: trail the stop once price moves 1R")
     b.add_argument("--stop-atr", type=float, default=btc_watcher.BUFFER_ATR,
                    help="entry/stop distance from the level in exec-timeframe ATRs (default 0.5)")
     b.add_argument("--max-candles", type=int, default=btc_watcher.STALE_EXEC_CANDLES,
@@ -181,6 +226,21 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--days", type=int, default=30)
     d.add_argument("--out", required=True)
     d.set_defaults(func=cmd_download)
+
+    rr = sub.add_parser("rr", help="replay CSV(s) at several fixed R:R exits and compare win rate vs break-even")
+    rr.add_argument("--csv", action="append", required=True, help="1m candle or trades CSV; repeat for more months")
+    rr.add_argument("--rr", default="1,2,3,4,5,6,auto", help="comma list of reward multiples, or auto")
+    rr.add_argument("--trail", action="store_true", help="trail the stop once price moves 1R in favour")
+    rr.add_argument("--symbol", default="BTCUSDT")
+    rr.add_argument("--exec-tf", default="15m", choices=("1m", "5m", "15m"))
+    rr.add_argument("--stop-atr", type=float, default=1.5)
+    rr.add_argument("--max-candles", type=int, default=96)
+    rr.add_argument("--cost-pct", type=float, default=0.10)
+    rr.add_argument("--balance", type=float, default=10.0)
+    rr.add_argument("--level", type=float, action="append", default=[])
+    rr.add_argument("--levels-file")
+    rr.add_argument("--levels-step", type=int, default=500, help="test levels every N USD when none are given")
+    rr.set_defaults(func=cmd_rr)
 
     g = sub.add_parser("guard", help="run the text guard on a sentence")
     g.add_argument("text")
