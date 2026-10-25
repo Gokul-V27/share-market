@@ -1,0 +1,34 @@
+{
+  "symbol": "HYPOTHETICAL 1.2xxx pair",
+  "source": "user-supplied hypothetical example",
+  "exec_timeframe": "5m",
+  "round_trip_cost_pct": 0.02,
+  "has_volume": false,
+  "timeframes": [
+    {"timeframe": "1h", "trend": 1, "structure": 1, "momentum": 0, "location": 1, "claimed_total": 3, "claimed_bias": "bullish"},
+    {"timeframe": "15m", "trend": 0, "structure": -1, "momentum": -1, "location": 0, "claimed_total": -2, "claimed_bias": "bearish"},
+    {"timeframe": "5m", "trend": 1, "structure": 0, "momentum": 1, "location": -1, "claimed_total": 1, "claimed_bias": "bullish", "seconds_to_close": 45},
+    {"timeframe": "1m", "trend": 0, "structure": 1, "momentum": 2, "location": 0, "claimed_total": 3, "claimed_bias": "bullish"}
+  ],
+  "levels": [
+    {"price": 1.2000, "label": "support (setup 2 trigger)"},
+    {"price": 1.2050, "label": "resistance (setup 1 trigger)"},
+    {"price": 1.2080, "label": "setup 3 trigger"}
+  ],
+  "setups": [
+    {"trigger_side": "above", "trigger_level": 1.2050, "entry": 1.2060, "stop": 1.2025,
+     "target1": 1.2100, "target2": 1.2150, "claimed_rr": 5.0,
+     "rationale": "Breakout of resistance, stop beyond the breakout level"},
+    {"trigger_side": "below", "trigger_level": 1.2000, "entry": 1.1990, "stop": 1.2030,
+     "target1": 1.1950, "target2": 1.1900, "claimed_rr": 5.0,
+     "rationale": "Breakdown of support with bearish 15m momentum"},
+    {"trigger_side": "above", "trigger_level": 1.2080, "entry": 1.2090, "stop": 1.2060,
+     "target1": 1.2120, "target2": 1.2170, "claimed_rr": 20.0,
+     "rationale": "Continuation through 1.2080, stop below the level"}
+  ],
+  "blind_spots": [
+    "Higher timeframes (4h/daily) not shown; broader trend context unknown",
+    "No economic calendar considered; major news can blast through levels"
+  ],
+  "claimed_verdict": {"bias": "mixed", "action": "WAIT", "confidence": "moderate"}
+}

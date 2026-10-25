@@ -1,0 +1,11 @@
+{
+  "_comment": "TEST levels for the 2026-09-01 BTCUSD replay: round numbers standing in for drawn lines. Replace with the horizontal lines you actually drew.",
+  "levels": [
+    {"price": 76500, "label": "round number"},
+    {"price": 77000, "label": "round number"},
+    {"price": 77500, "label": "round number"},
+    {"price": 78000, "label": "round number"},
+    {"price": 78500, "label": "round number"},
+    {"price": 79000, "label": "round number"}
+  ]
+}
