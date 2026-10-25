@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from .engine import Result, analyse
+from .engine import WEAK_RR, Result, analyse
 from .indicators import atr, nearest_levels, read_timeframe
 from .market_data import TF_MS, Candle, fetch_candles, resample
 from .models import AnalysisInput, Level, Setup, fmt_price
@@ -39,11 +39,12 @@ def load_levels(path: Optional[str], extra: list[float]) -> list[Level]:
     return [uniq[p] for p in sorted(uniq)]
 
 
-def build_setups(price: float, levels: list[Level], atr_exec: Optional[float], exec_tf: str) -> list[Setup]:
+def build_setups(price: float, levels: list[Level], atr_exec: Optional[float], exec_tf: str,
+                 buffer_atr: float = BUFFER_ATR) -> list[Setup]:
     """Up to four close-triggered setups around the nearest drawn support and resistance."""
     if not levels or not atr_exec:
         return []
-    buf = BUFFER_ATR * atr_exec
+    buf = buffer_atr * atr_exec
     prices = sorted(lv.price for lv in levels)
     support, resistance = nearest_levels(price, levels)
     above = lambda x: [p for p in prices if p > x]  # noqa: E731
@@ -106,12 +107,13 @@ def level_events(prev: Candle, cur: Candle, levels: list[Level]) -> list[str]:
 
 
 def build_analysis(symbol: str, candles: dict[str, list[Candle]], levels: list[Level], now_ms: int,
-                   exec_tf: str = "5m", cost_pct: float = 0.10, source: str = "") -> AnalysisInput:
+                   exec_tf: str = "5m", cost_pct: float = 0.10, source: str = "",
+                   buffer_atr: float = BUFFER_ATR) -> AnalysisInput:
     reads = [read_timeframe(tf, candles[tf], levels, now_ms) for tf in TIMEFRAMES if candles.get(tf)]
     exec_closed = [c for c in candles.get(exec_tf, []) if c.is_closed(now_ms)]
     setups = []
     if exec_closed:
-        setups = build_setups(exec_closed[-1].close, levels, atr(exec_closed), exec_tf)
+        setups = build_setups(exec_closed[-1].close, levels, atr(exec_closed), exec_tf, buffer_atr)
     return AnalysisInput(
         symbol=symbol,
         timeframes=reads,
@@ -165,6 +167,7 @@ class Trade:
     opened: int
     setup: Setup
     fill: float
+    target: float = 0.0  # take-profit: target 1, or fill +/- N x risk with a fixed R:R exit
     exit: Optional[float] = None
     closed: Optional[int] = None
     reason: str = ""
@@ -187,10 +190,14 @@ def _ts(ms: int) -> str:
 
 def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD", exec_tf: str = "5m",
            cost_pct: float = 0.10, warmup_minutes: Optional[int] = None,
-           reads: Optional[list] = None) -> tuple[list[Trade], list[str]]:
+           reads: Optional[list] = None, target_r: Optional[float] = None,
+           stop_atr: float = BUFFER_ATR, max_candles: int = STALE_EXEC_CANDLES) -> tuple[list[Trade], list[str]]:
     """Step through history one exec candle at a time and paper-trade Laya's own rules.
 
     Pass a list as `reads` to collect (time_ms, bias, action) for every exec-candle read.
+    target_r: exit at a fixed reward:risk (e.g. 4 for 1:4) instead of target 1.
+    stop_atr: entry/stop distance from the level, in exec-timeframe ATRs.
+    max_candles: close a trade still open after this many exec candles.
 
     A trade is taken only when the rules would say ENTER-ON-TRIGGER: a valid, with-trend,
     not-weak setup (as built at the previous close) whose close-only trigger fires. Fill is the
@@ -216,7 +223,7 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
         snap = snaps.at(now)
         exec_c = [c for c in snap[exec_tf] if c.is_closed(now)]
         if open_trade is not None:
-            _manage(open_trade, by_time, now - step, now, step)
+            _manage(open_trade, by_time, now - step, now, step, max_candles)
             if open_trade.exit is not None:
                 trades.append(open_trade)
                 log.append(_trade_line(open_trade, cost_pct))
@@ -225,15 +232,22 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
             prev, cur = exec_c[-2], exec_c[-1]
             v = pending.verdict
             for r in pending.setups:
-                if (v.bias != "mixed" and r.valid and r.alignment == "with-trend" and not r.weak
+                # With a fixed R:R exit the planned reward is target_r, not the distance to target 1.
+                worth_it = target_r >= WEAK_RR if target_r else not r.weak
+                if (v.bias != "mixed" and r.valid and r.alignment == "with-trend" and worth_it
                         and trigger_fired(r.setup, prev, cur)):
-                    open_trade = Trade(opened=now, setup=r.setup, fill=cur.close)
                     if (r.direction == "long" and cur.close <= r.setup.stop) or (
                             r.direction == "short" and cur.close >= r.setup.stop):
-                        open_trade = None  # the close is already through the stop; no trade
-                        continue
+                        continue  # the close is already through the stop; no trade
+                    sign = 1 if r.direction == "long" else -1
+                    target = r.setup.target1
+                    if target_r:
+                        target = cur.close + sign * target_r * abs(cur.close - r.setup.stop)
+                    if sign * (target - cur.close) <= 0:
+                        continue  # the close already ran past target 1
+                    open_trade = Trade(opened=now, setup=r.setup, fill=cur.close, target=target)
                     break
-        pending = analyse(build_analysis(symbol, snap, levels, now, exec_tf, cost_pct, "csv replay"))
+        pending = analyse(build_analysis(symbol, snap, levels, now, exec_tf, cost_pct, "csv replay", stop_atr))
         if reads is not None and now < end:  # the read at `end` belongs to the next day
             reads.append((now, pending.verdict.bias, pending.verdict.action))
         now += step
@@ -245,7 +259,8 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
     return trades, log
 
 
-def _manage(t: Trade, by_time: dict[int, Candle], frm: int, to: int, step: int) -> None:
+def _manage(t: Trade, by_time: dict[int, Candle], frm: int, to: int, step: int,
+            max_candles: int = STALE_EXEC_CANDLES) -> None:
     long = t.setup.direction == "long"
     ms = frm
     while ms < to:
@@ -254,23 +269,23 @@ def _manage(t: Trade, by_time: dict[int, Candle], frm: int, to: int, step: int) 
         if c is None or c.open_time < t.opened:
             continue
         hit_stop = c.low <= t.setup.stop if long else c.high >= t.setup.stop
-        hit_t1 = c.high >= t.setup.target1 if long else c.low <= t.setup.target1
+        hit_target = c.high >= t.target if long else c.low <= t.target
         if hit_stop:
             t.exit, t.closed, t.reason = t.setup.stop, c.close_time, "stop"
             return
-        if hit_t1:
-            t.exit, t.closed, t.reason = t.setup.target1, c.close_time, "target 1"
+        if hit_target:
+            t.exit, t.closed, t.reason = t.target, c.close_time, "target"
             return
-    if to - t.opened >= STALE_EXEC_CANDLES * step:
+    if to - t.opened >= max_candles * step:
         last = by_time.get(to - 60_000)
         if last is not None:
-            t.exit, t.closed, t.reason = last.close, to, f"time stop ({STALE_EXEC_CANDLES} candles)"
+            t.exit, t.closed, t.reason = last.close, to, f"time stop ({max_candles} candles)"
 
 
 def _trade_line(t: Trade, cost_pct: float) -> str:
     s = t.setup
     return (f"{_ts(t.opened)} {s.direction:5} {s.kind:9} fill {fmt_price(t.fill)} stop {fmt_price(s.stop)} "
-            f"T1 {fmt_price(s.target1)} -> {fmt_price(t.exit)} ({t.reason}) "
+            f"target {fmt_price(t.target)} -> {fmt_price(t.exit)} ({t.reason}) "
             f"{t.r_multiple():+.2f}R gross, {t.r_multiple(cost_pct):+.2f}R net")
 
 

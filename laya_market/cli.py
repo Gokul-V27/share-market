@@ -52,9 +52,14 @@ def cmd_btc(a) -> int:
             print(f"wrote {len(candles)} 1m candles to {a.save_1m}", file=sys.stderr)
         if a.replay:
             reads: list = []
-            trades, log = btc_watcher.replay(candles, levels, a.symbol, a.exec_tf, a.cost_pct, reads=reads)
+            trades, log = btc_watcher.replay(candles, levels, a.symbol, a.exec_tf, a.cost_pct, reads=reads,
+                                             target_r=a.target_r, stop_atr=a.stop_atr,
+                                             max_candles=a.max_candles)
+            exit_rule = f"fixed 1:{a.target_r:g}" if a.target_r else "target 1 (next drawn level)"
             print(f"Paper-trade replay of {a.csv} ({len(candles)} 1m candles, levels: "
                   f"{', '.join(f'{lv.price:g}' for lv in levels) or 'none'})")
+            print(f"Exit: {exit_rule} | stop {a.stop_atr:g} ATR beyond the level | "
+                  f"time stop {a.max_candles} {a.exec_tf} candles")
             print("\n".join(log) if log else "(no trades)")
             print(btc_watcher.summarize(trades, a.cost_pct))
             if a.balance:
@@ -154,6 +159,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--save-1m", help="with --csv: also write the aggregated 1m candles here")
     b.add_argument("--balance", type=float, help="with --replay: paper account size in USD, e.g. 10")
     b.add_argument("--leverage", type=float, default=1.0, help="with --balance: position = balance x this")
+    b.add_argument("--target-r", type=float, help="with --replay: exit at a fixed R:R, e.g. 4 for 1:4")
+    b.add_argument("--stop-atr", type=float, default=btc_watcher.BUFFER_ATR,
+                   help="entry/stop distance from the level in exec-timeframe ATRs (default 0.5)")
+    b.add_argument("--max-candles", type=int, default=btc_watcher.STALE_EXEC_CANDLES,
+                   help="with --replay: close trades still open after this many exec candles (default 8)")
     b.add_argument("--json", action="store_true")
     guard_opts(b)
     b.set_defaults(func=cmd_btc)

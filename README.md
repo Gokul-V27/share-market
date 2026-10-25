@@ -137,6 +137,32 @@ With $10, full balance per trade and no leverage:
 Before costs the rules roughly break even. After costs every variant loses, because round-number
 levels and half-ATR stops get stopped out by noise far more often than they reach target 1.
 
+### Fixed 1:4 / 1:6 exits
+
+`--target-r 4` (or `6`) exits at 4R (6R) from the fill instead of at the next drawn level, and
+the entry filter then uses that planned R:R. `--stop-atr` sets how far beyond the level the
+stop sits (in exec-timeframe ATRs, default 0.5), and `--max-candles` sets the time stop
+(default 8 exec candles).
+
+```bash
+python -m laya_market btc --csv data/btcusdt_2026-09_1m.csv.gz --levels-file examples/btc_levels_2026-09.json \
+    --replay --balance 10 --exec-tf 15m --target-r 6 --stop-atr 1.5 --max-candles 96
+```
+
+$10 per month, levels every 500 USD, full balance per trade, no leverage. The settings were
+picked on September from 54 combinations; August and October were not used to pick them.
+
+| Settings | Aug 2026 | Sep 2026 | Oct 1-24 2026 |
+|---|---|---|---|
+| original: 5m, exit at next level, 0.5 ATR stop, 8-candle time stop | $7.38 | $7.19 | $7.73 |
+| 5m, 1:4, 1 ATR stop, 1-day time stop | $9.49 | $8.93 | $8.71 |
+| 5m, 1:6, 1 ATR stop, 1-day time stop | $9.47 | $9.69 | $9.12 |
+| 15m, 1:4, 1.5 ATR stop, 1-day time stop | $10.34 | $10.27 | $9.43 |
+| 15m, 1:6, 1.5 ATR stop, 1-day time stop | **$10.97** | **$11.24** | $9.90 |
+
+All after a 0.10% round-trip cost. Wider stops, a far target and fewer trades did better than
+tight 5m scalps. Only about 1 trade in 7-9 reached 6R, so long losing streaks are normal.
+
 `tests/fixtures/btcusd_2026-09-01_1m.csv` is the 2026-09-01 BTCUSD tick file (314,107 trades)
 aggregated to 1,440 one-minute candles. `examples/btc_levels.json` uses round numbers as
 **test levels**; replace them with the lines you actually draw. On that day, with those levels,

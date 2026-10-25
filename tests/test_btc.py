@@ -164,7 +164,7 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(len(trades), len(log))
         self.assertGreater(len(trades), 0)
         for t in trades:
-            self.assertTrue(t.reason in ("stop", "target 1", "end of data") or t.reason.startswith("time stop"))
+            self.assertTrue(t.reason in ("stop", "target", "end of data") or t.reason.startswith("time stop"))
             self.assertGreaterEqual(t.r_multiple(), -1.0001)  # a stop can't lose more than 1R gross
             self.assertLess(t.r_multiple(0.10), t.r_multiple())
             self.assertGreater(t.closed, t.opened)
@@ -198,6 +198,19 @@ class WatcherTest(unittest.TestCase):
         self.assertIn("trades: 14", rows[-2])
         self.assertTrue(rows[-1].startswith("$ 10.00 -> $9.9441"))
         self.assertTrue(all(_ts_day(ms) == "2026-09-01" for ms, _, _ in reads))
+
+    def test_fixed_rr_exit(self):
+        for r_target in (4, 6):
+            trades, _ = btc_watcher.replay(self.candles, LEVELS, "BTCUSD", "5m", 0.10, target_r=r_target,
+                                           stop_atr=1.0, max_candles=288)
+            self.assertGreater(len(trades), 0)
+            for t in trades:
+                sign = 1 if t.setup.direction == "long" else -1
+                self.assertAlmostEqual(t.target, t.fill + sign * r_target * t.risk, places=6)
+                if t.reason == "target":
+                    self.assertAlmostEqual(t.r_multiple(), r_target, places=6)
+                if t.reason == "stop":
+                    self.assertAlmostEqual(t.r_multiple(), -1, places=6)
 
     def test_account_with_no_trades(self):
         self.assertIn("End balance $10.0000", btc_watcher.account([], 10.0, 0.1)[-1])
