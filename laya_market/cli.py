@@ -83,6 +83,10 @@ def cmd_btc(a) -> int:
         g = text_guard.check(a.note, a.guard)
         if g.asks_for_call:
             print(text_guard.REFUSAL + "\n")
+    if a.paper_minutes:
+        btc_watcher.paper_live(a.symbol, levels, a.exec_tf, a.cost_pct, a.source, a.paper_minutes,
+                               a.balance or 10.0, a.target_r, a.stop_atr, a.max_candles, a.trail)
+        return 0
     return btc_watcher.watch(a.symbol, levels, a.exec_tf, a.cost_pct, a.source, a.every, not a.watch, a.json)
 
 
@@ -223,6 +227,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--leverage", type=float, default=1.0, help="with --balance: position = balance x this")
     b.add_argument("--target-r", type=_target_r, help="with --replay: exit at a fixed R:R, e.g. 4 for 1:4, or auto")
     b.add_argument("--trail", action="store_true", help="with --replay: trail the stop once price moves 1R")
+    b.add_argument("--paper-minutes", type=float,
+                   help="live forward test: paper-trade live candles for this many minutes (no real orders)")
     b.add_argument("--stop-atr", type=float, default=btc_watcher.BUFFER_ATR,
                    help="entry/stop distance from the level in exec-timeframe ATRs (default 0.5)")
     b.add_argument("--max-candles", type=int, default=btc_watcher.STALE_EXEC_CANDLES,

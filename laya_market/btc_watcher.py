@@ -239,27 +239,7 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
                 log.append(_trade_line(open_trade, cost_pct))
                 open_trade = None
         if open_trade is None and pending is not None and len(exec_c) >= 2:
-            prev, cur = exec_c[-2], exec_c[-1]
-            v = pending.verdict
-            for r in pending.setups:
-                # With a fixed R:R exit the planned reward is target_r, not the distance to target 1.
-                planned = auto_target_r(v.total) if target_r == "auto" else target_r
-                worth_it = planned >= WEAK_RR if planned else not r.weak
-                if (v.bias != "mixed" and r.valid and r.alignment == "with-trend" and worth_it
-                        and trigger_fired(r.setup, prev, cur)):
-                    if (r.direction == "long" and cur.close <= r.setup.stop) or (
-                            r.direction == "short" and cur.close >= r.setup.stop):
-                        continue  # the close is already through the stop; no trade
-                    sign = 1 if r.direction == "long" else -1
-                    target = r.setup.target1
-                    if planned:
-                        target = cur.close + sign * planned * abs(cur.close - r.setup.stop)
-                    if sign * (target - cur.close) <= 0:
-                        continue  # the close already ran past target 1
-                    open_trade = Trade(opened=now, setup=r.setup, fill=cur.close, target=target,
-                                       stop=r.setup.stop, planned_r=abs(target - cur.close) / abs(
-                                           cur.close - r.setup.stop))
-                    break
+            open_trade = try_entry(pending, exec_c[-2], exec_c[-1], now, target_r)
         pending = analyse(build_analysis(symbol, snap, levels, now, exec_tf, cost_pct, "csv replay", stop_atr))
         if reads is not None and now < end:  # the read at `end` belongs to the next day
             reads.append((now, pending.verdict.bias, pending.verdict.action))
@@ -270,6 +250,34 @@ def replay(candles_1m: list[Candle], levels: list[Level], symbol: str = "BTCUSD"
         trades.append(open_trade)
         log.append(_trade_line(open_trade, cost_pct))
     return trades, log
+
+
+def try_entry(pending: Result, prev: Candle, cur: Candle, now: int, target_r=None) -> Optional[Trade]:
+    """Open a paper trade if the read made at the previous close says ENTER and its trigger fired on `cur`.
+
+    Takes the first valid, with-trend setup (in rank order) whose planned R:R is at least 1:1.5 and
+    whose close-only trigger fired. Fill is cur's close.
+    """
+    v = pending.verdict
+    if v.bias == "mixed":
+        return None
+    for r in pending.setups:
+        # With a fixed R:R exit the planned reward is target_r, not the distance to target 1.
+        planned = auto_target_r(v.total) if target_r == "auto" else target_r
+        worth_it = planned >= WEAK_RR if planned else not r.weak
+        if not (r.valid and r.alignment == "with-trend" and worth_it and trigger_fired(r.setup, prev, cur)):
+            continue
+        sign = 1 if r.direction == "long" else -1
+        if sign * (cur.close - r.setup.stop) <= 0:
+            continue  # the close is already through the stop; no trade
+        target = r.setup.target1
+        if planned:
+            target = cur.close + sign * planned * abs(cur.close - r.setup.stop)
+        if sign * (target - cur.close) <= 0:
+            continue  # the close already ran past target 1
+        return Trade(opened=now, setup=r.setup, fill=cur.close, target=target, stop=r.setup.stop,
+                     planned_r=abs(target - cur.close) / abs(cur.close - r.setup.stop))
+    return None
 
 
 def _manage(t: Trade, by_time: dict[int, Candle], frm: int, to: int, step: int,
@@ -492,3 +500,81 @@ def rr_table(rows: list[dict], cost_pct: float, start: float) -> list[str]:
                    f"{s['win_rate']:.1%} | {s['breakeven']:.1%} | {s['breakeven_after_cost']:.1%} | "
                    f"{s['verdict']} | ${s['end_balance']:,.2f} |")
     return out
+
+
+# --- live paper trading ------------------------------------------------------------------------
+
+def paper_live(symbol: str, levels: list[Level], exec_tf: str, cost_pct: float, source: str,
+               minutes: float, balance: float, target_r=None, stop_atr: float = BUFFER_ATR,
+               max_candles: int = STALE_EXEC_CANDLES, trail: bool = False, out=None) -> list[Trade]:
+    """Forward-test on live candles for `minutes`: read at every exec-candle close, paper-trade, log.
+
+    Same decisions as replay(): entries via try_entry() on the read from the previous close,
+    exits via _manage() on 1m candles. No orders are sent anywhere.
+    """
+    out = out or sys.stdout
+    step = TF_MS[exec_tf]
+
+    def say(line: str) -> None:
+        print(line, file=out, flush=True)
+
+    stop_at = time.time() + minutes * 60
+    exit_rule = ("auto 1:3-1:6" if target_r == "auto" else f"1:{target_r:g}" if target_r else "target 1")
+    say(f"LIVE PAPER TEST | {symbol} | {exec_tf} | exit {exit_rule} | stop {stop_atr:g} ATR | "
+        f"time stop {max_candles} candles{' | trailing' if trail else ''} | ${balance:g} | "
+        f"{minutes:g} min | levels {', '.join(f'{lv.price:g}' for lv in levels)}")
+    pending: Optional[Result] = None
+    open_trade: Optional[Trade] = None
+    trades: list[Trade] = []
+    while True:
+        now = (int(time.time() * 1000) // step + 1) * step  # next exec-candle close
+        if now / 1000 > stop_at:
+            break
+        time.sleep(max(0.0, now / 1000 - time.time()) + 5)  # let the exchange publish the closed candle
+        candles = None
+        for _ in range(6):
+            try:
+                candles, _name = fetch_all(symbol, source)
+            except Exception as e:
+                say(f"{_ts(now)} [data error] {e}")
+                time.sleep(10)
+                continue
+            if any(c.open_time == now - step for c in candles[exec_tf]):
+                break
+            time.sleep(10)
+        if candles is None:
+            continue
+        by_time = {c.open_time: c for c in candles["1m"] if c.is_closed(now)}
+        exec_c = [c for c in candles[exec_tf] if c.is_closed(now)]
+        if open_trade is not None:
+            _manage(open_trade, by_time, now - step, now, step, max_candles, trail)
+            if open_trade.exit is not None:
+                trades.append(open_trade)
+                say(f"{_ts(now)} CLOSED {_trade_line(open_trade, cost_pct)}")
+                open_trade = None
+        if open_trade is None and pending is not None and len(exec_c) >= 2:
+            open_trade = try_entry(pending, exec_c[-2], exec_c[-1], now, target_r)
+            if open_trade is not None:
+                s = open_trade.setup
+                say(f"{_ts(now)} OPENED paper {s.direction} {s.kind} fill {fmt_price(open_trade.fill)} "
+                    f"stop {fmt_price(open_trade.stop)} target {fmt_price(open_trade.target)} "
+                    f"(1:{open_trade.planned_r:.1f})")
+        pending = analyse(build_analysis(symbol, candles, levels, now, exec_tf, cost_pct, "live", stop_atr))
+        v = pending.verdict
+        top = next((r for r in pending.setups if r.valid), None)
+        top_txt = f"top #{top.setup.id} {top.direction} {top.setup.trigger_text}" if top else "no setup"
+        events = level_events(exec_c[-2], exec_c[-1], levels) if len(exec_c) >= 2 else []
+        state = "in trade" if open_trade else "flat"
+        say(f"{_ts(now)} close {fmt_price(exec_c[-1].close) if exec_c else '-'} | {v.bias} {v.total:+d} "
+            f"{v.action} ({v.confidence}) | {top_txt} | {state}" + (f" | {'; '.join(events)}" if events else ""))
+    if open_trade is not None:  # mark to market at the last 1m close
+        last = max(by_time.values(), key=lambda c: c.open_time) if by_time else None
+        if last is not None:
+            open_trade.exit, open_trade.closed, open_trade.reason = last.close, last.close_time, "end of test"
+            trades.append(open_trade)
+            say(f"CLOSED {_trade_line(open_trade, cost_pct)}")
+    say(summarize(trades, cost_pct))
+    for line in account(trades, balance, cost_pct):
+        say(line)
+    say("Study example, not financial advice.")
+    return trades
